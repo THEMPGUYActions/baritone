@@ -49,10 +49,13 @@ import net.minecraft.core.Vec3i;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.block.*;
+import net.minecraft.world.level.block.LiquidBlockContainer;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
@@ -282,7 +285,10 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                         continue; // irrelevant
                     }
                     BlockState curr = bcc.bsi.get0(x, y, z);
-                    if (!(curr.getBlock() instanceof AirBlock) && !(curr.getBlock() == Blocks.WATER || curr.getBlock() == Blocks.LAVA) && !valid(curr, desired, false)) {
+                    if (!(curr.getBlock() instanceof AirBlock)
+                            && !(curr.getBlock() == Blocks.WATER || curr.getBlock() == Blocks.LAVA)
+                            && !valid(curr, desired, false)
+                            && !needsWaterlogging(curr, desired)) {
                         BetterBlockPos pos = new BetterBlockPos(x, y, z);
                         Optional<Rotation> rot = RotationUtils.reachable(ctx, pos, ctx.playerController().getBlockReachDistance());
                         if (rot.isPresent()) {
@@ -293,6 +299,60 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             }
         }
         return Optional.empty();
+    }
+
+    private static final class Waterlog {
+        private final int hotbarSelection;
+        private final BetterBlockPos pos;
+        private final Rotation rot;
+
+        private Waterlog(int hotbarSelection, BetterBlockPos pos, Rotation rot) {
+            this.hotbarSelection = hotbarSelection;
+            this.pos = pos;
+            this.rot = rot;
+        }
+    }
+
+    private Optional<Waterlog> findWaterloggable(BuilderCalculationContext bcc) {
+        int bucketSlot = -1;
+        for (int i = 0; i < 9; i++) {
+            ItemStack stack = ctx.player().getInventory().getNonEquipmentItems().get(i);
+            if (!stack.isEmpty() && stack.getItem() == Items.WATER_BUCKET) {
+                bucketSlot = i;
+                break;
+            }
+        }
+
+        if (bucketSlot < 0) {
+            return Optional.empty();
+        }
+
+        BetterBlockPos center = ctx.playerFeet();
+        for (BetterBlockPos pos : incorrectPositions) {
+            if (pos.distSqr(center) > 64) {
+                continue;
+            }
+            BlockState current = bcc.bsi.get0(pos);
+            BlockState desired = bcc.getSchematic(pos.x, pos.y, pos.z, current);
+            if (!needsWaterlogging(current, desired)) {
+                continue;
+            }
+            Optional<Rotation> rot = RotationUtils.reachable(ctx, pos, ctx.playerController().getBlockReachDistance());
+            if (rot.isPresent()) {
+                return Optional.of(new Waterlog(bucketSlot, pos, rot.get()));
+            }
+        }
+        return Optional.empty();
+    }
+
+    private boolean hasWaterloggingWork(BuilderCalculationContext bcc) {
+        for (BetterBlockPos pos : incorrectPositions) {
+            BlockState current = bcc.bsi.get0(pos);
+            if (needsWaterlogging(current, bcc.getSchematic(pos.x, pos.y, pos.z, current))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static class Placement {
@@ -407,7 +467,8 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             if (!meme.canPlace()) {
                 continue;
             }
-            if (valid(wouldBePlaced, desired, true)) {
+            if (valid(wouldBePlaced, desired, true) || needsWaterlogging(wouldBePlaced, desired)) {
+                // Place the correctly oriented block first; a water bucket can then set its waterlogged property.
                 return OptionalInt.of(i);
             }
         }
@@ -528,6 +589,19 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         }
         if (Baritone.settings().distanceTrim.value) {
             trim();
+        }
+
+        Optional<Waterlog> toWaterlog = findWaterloggable(bcc);
+        if (toWaterlog.isPresent() && isSafeToCancel && ctx.player().onGround() && ticks <= 0) {
+            Waterlog waterlog = toWaterlog.get();
+            baritone.getLookBehavior().updateTarget(waterlog.rot, true);
+            ctx.player().getInventory().setSelectedSlot(waterlog.hotbarSelection);
+            baritone.getInputOverrideHandler().setInputForceState(Input.SNEAK, true);
+            // Only use the bucket once the ray trace actually hits the intended waterloggable block.
+            if (ctx.isLookingAt(waterlog.pos)) {
+                baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_RIGHT, true);
+            }
+            return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
         }
 
         Optional<Pair<BetterBlockPos, Rotation>> toBreak = toBreakNearPlayer(bcc);
@@ -704,10 +778,16 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         List<BetterBlockPos> breakable = new ArrayList<>();
         List<BetterBlockPos> sourceLiquids = new ArrayList<>();
         List<BetterBlockPos> flowingLiquids = new ArrayList<>();
+        List<BetterBlockPos> waterlogging = new ArrayList<>();
         Map<BlockState, Integer> missing = new HashMap<>();
         List<BetterBlockPos> outOfBounds = new ArrayList<>();
         incorrectPositions.forEach(pos -> {
             BlockState state = bcc.bsi.get0(pos);
+            BlockState desired = bcc.getSchematic(pos.x, pos.y, pos.z, state);
+            if (needsWaterlogging(state, desired)) {
+                waterlogging.add(pos);
+                return;
+            }
             if (state.getBlock() instanceof AirBlock) {
                 BlockState desired = bcc.getSchematic(pos.x, pos.y, pos.z, state);
                 if (desired == null) {
@@ -758,6 +838,9 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                 logDirect(flowingLiquids.stream()
                         .map(p -> String.format("%s %s %s", p.x, p.y, p.z))
                         .collect(Collectors.joining("\n")));
+            }
+            if (logMissing && !waterlogging.isEmpty()) {
+                logDirect("Cannot finish waterlogged blocks without a water bucket in the hotbar. Keep a water bucket available and resume building.");
             }
             return null;
         }
@@ -1062,6 +1145,24 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             }
         }
         return false;
+    }
+
+    private static boolean needsWaterlogging(BlockState current, BlockState desired) {
+        if (current == null || desired == null || current.getBlock() != desired.getBlock()
+                || !(current.getBlock() instanceof LiquidBlockContainer)
+                || !current.hasProperty(BlockStateProperties.WATERLOGGED)
+                || !desired.hasProperty(BlockStateProperties.WATERLOGGED)
+                || current.getValue(BlockStateProperties.WATERLOGGED)
+                || !desired.getValue(BlockStateProperties.WATERLOGGED)) {
+            return false;
+        }
+        for (Property<?> property : current.getProperties()) {
+            if (property != BlockStateProperties.WATERLOGGED
+                    && !Objects.equals(current.getValue(property), desired.getValue(property))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean containsBlockState(Collection<BlockState> states, BlockState state) {
