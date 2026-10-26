@@ -597,11 +597,9 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             for (int i = 9; i < 36; i++) {
                 ItemStack stack = ctx.player().getInventory().getNonEquipmentItems().get(i);
                 if (!stack.isEmpty() && stack.getItem() == Items.WATER_BUCKET) {
-                    // Prefer empty/non-block hotbar slots so we do not displace a block needed for the build.
-                    if (!baritone.getInventoryBehavior().attemptToPutOnHotbar(i, slot -> {
-                        ItemStack hotbarStack = ctx.player().getInventory().getNonEquipmentItems().get(slot);
-                        return !hotbarStack.isEmpty() && hotbarStack.getItem() instanceof BlockItem;
-                    })) {
+                    // InventoryBehavior only considers hotbar slots 1-7 and returns displaced items to inventory.
+                    // Let it choose any temporary slot; the normal builder inventory logic can restore blocks later.
+                    if (!baritone.getInventoryBehavior().attemptToPutOnHotbar(i, slot -> false)) {
                         return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
                     }
                     break;
@@ -862,7 +860,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                         .collect(Collectors.joining("\n")));
             }
             if (logMissing && !waterlogging.isEmpty()) {
-                logDirect("Cannot finish waterlogged blocks without a water bucket in the hotbar. Keep a water bucket available and resume building.");
+                logDirect("Cannot finish waterlogged blocks: keep a water bucket in the hotbar and ensure the blocks are reachable, then resume building.");
             }
             return null;
         }
