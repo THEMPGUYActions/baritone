@@ -1156,7 +1156,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
      * Facing, axis, half, hinge, rotation, waterlogging and similar properties are
      * checked later against the state Minecraft would actually place at the target.
      */
-    private static boolean hasBlockItem(BlockState candidate, BlockState desired) {
+    static boolean hasBlockItem(BlockState candidate, BlockState desired) {
         return candidate != null && desired != null && candidate.getBlock() == desired.getBlock();
     }
 
@@ -1169,7 +1169,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         return false;
     }
 
-    private static boolean needsWaterlogging(BlockState current, BlockState desired) {
+    static boolean needsWaterlogging(BlockState current, BlockState desired) {
         if (current == null || desired == null || current.getBlock() != desired.getBlock()
                 || !(current.getBlock() instanceof LiquidBlockContainer)
                 || !current.hasProperty(BlockStateProperties.WATERLOGGED)
