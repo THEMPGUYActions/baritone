@@ -1,0 +1,72 @@
+name: Release Minecraft 1.21.11 builds
+
+on:
+  push:
+    branches:
+      - '1.21.11'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-1.21.11
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    if: github.ref == 'refs/heads/1.21.11'
+    name: Build and publish JARs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: gradle
+
+      - name: Prepare release version
+        id: version
+        shell: bash
+        run: |
+          VERSION="1.21.11.${GITHUB_RUN_NUMBER}"
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build all configured loaders
+        run: ./gradlew build -Pmod_version="${{ steps.version.outputs.version }}"
+
+      - name: Verify release JARs exist
+        shell: bash
+        run: |
+          shopt -s nullglob
+          jars=(dist/*.jar)
+          if (( ${#jars[@]} == 0 )); then
+            echo "Build completed without producing any JARs in dist/." >&2
+            exit 1
+          fi
+          printf "Release assets:\n"
+          printf " - %s\n" "${jars[@]}"
+
+      - name: Publish GitHub Release and tag
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Baritone ${{ steps.version.outputs.version }} (Minecraft 1.21.11)
+          body: |
+            Automated Baritone build for Minecraft 1.21.11.
+
+            Built from commit ${{ github.sha }}. JARs are provided for the loaders configured by this branch.
+          files: dist/*.jar
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          generate_release_notes: true
+          make_latest: false
