@@ -313,16 +313,18 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         }
     }
 
-    private Optional<Waterlog> findWaterloggable(BuilderCalculationContext bcc) {
-        int bucketSlot = -1;
+    private int waterBucketHotbarSlot() {
         for (int i = 0; i < 9; i++) {
             ItemStack stack = ctx.player().getInventory().getNonEquipmentItems().get(i);
             if (!stack.isEmpty() && stack.getItem() == Items.WATER_BUCKET) {
-                bucketSlot = i;
-                break;
+                return i;
             }
         }
+        return -1;
+    }
 
+    private Optional<Waterlog> findWaterloggable(BuilderCalculationContext bcc) {
+        int bucketSlot = waterBucketHotbarSlot();
         if (bucketSlot < 0) {
             return Optional.empty();
         }
@@ -589,6 +591,22 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         }
         if (Baritone.settings().distanceTrim.value) {
             trim();
+        }
+
+        if (hasWaterloggingWork(bcc) && waterBucketHotbarSlot() < 0 && Baritone.settings().allowInventory.value) {
+            for (int i = 9; i < 36; i++) {
+                ItemStack stack = ctx.player().getInventory().getNonEquipmentItems().get(i);
+                if (!stack.isEmpty() && stack.getItem() == Items.WATER_BUCKET) {
+                    // Prefer empty/non-block hotbar slots so we do not displace a block needed for the build.
+                    if (!baritone.getInventoryBehavior().attemptToPutOnHotbar(i, slot -> {
+                        ItemStack hotbarStack = ctx.player().getInventory().getNonEquipmentItems().get(slot);
+                        return hotbarStack.isEmpty() || !(hotbarStack.getItem() instanceof BlockItem);
+                    })) {
+                        return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
+                    }
+                    break;
+                }
+            }
         }
 
         Optional<Waterlog> toWaterlog = findWaterloggable(bcc);
