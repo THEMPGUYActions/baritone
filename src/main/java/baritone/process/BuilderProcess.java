@@ -1202,6 +1202,11 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             return true;
         }
         if (current.getBlock() instanceof LiquidBlock && Baritone.settings().okIfWater.value) {
+            // Water is not a substitute for a schematic block that explicitly needs to be waterlogged.
+            if (desired.hasProperty(BlockStateProperties.WATERLOGGED)
+                    && desired.getValue(BlockStateProperties.WATERLOGGED)) {
+                return false;
+            }
             return true;
         }
         if (current.getBlock() instanceof AirBlock && desired.getBlock() instanceof AirBlock) {
