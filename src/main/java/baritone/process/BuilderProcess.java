@@ -809,7 +809,6 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                 return;
             }
             if (state.getBlock() instanceof AirBlock) {
-                BlockState desired = bcc.getSchematic(pos.x, pos.y, pos.z, state);
                 if (desired == null) {
                     outOfBounds.add(pos);
                 } else if (containsBlockItem(approxPlaceable, desired)) {
