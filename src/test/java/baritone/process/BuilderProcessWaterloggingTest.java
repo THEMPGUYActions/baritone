@@ -17,15 +17,22 @@
 
 package baritone.process;
 
+import net.minecraft.server.Bootstrap;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class BuilderProcessWaterloggingTest {
+
+    @BeforeClass
+    public static void bootstrapMinecraftRegistries() {
+        Bootstrap.bootStrap();
+    }
 
     @Test
     public void inventoryMatchingUsesBlockIdentityRatherThanPlacementProperties() {
