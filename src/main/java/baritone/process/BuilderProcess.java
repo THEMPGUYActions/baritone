@@ -841,6 +841,10 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             }
         });
         sourceLiquids.forEach(pos -> toPlace.add(new GoalBlock(pos.above())));
+        if (waterBucketHotbarSlot() >= 0) {
+            // Move into interaction range first when a waterlogged block is not reachable from here.
+            waterlogging.forEach(pos -> toPlace.add(new GoalGetToBlock(pos)));
+        }
 
         if (!toPlace.isEmpty()) {
             return new JankyGoalComposite(new GoalComposite(toPlace.toArray(new Goal[0])), new GoalComposite(toBreak.toArray(new Goal[0])));
