@@ -568,7 +568,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             outer:
             for (BlockState desired : desirableOnHotbar) {
                 for (int i = 0; i < 9; i++) {
-                    if (valid(approxPlaceable.get(i), desired, true)) {
+                    if (hasBlockItem(approxPlaceable.get(i), desired)) {
                         usefulSlots.add(i);
                         continue outer;
                     }
@@ -579,7 +579,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             outer:
             for (int i = 9; i < 36; i++) {
                 for (BlockState desired : noValidHotbarOption) {
-                    if (valid(approxPlaceable.get(i), desired, true)) {
+                    if (hasBlockItem(approxPlaceable.get(i), desired)) {
                         if (!baritone.getInventoryBehavior().attemptToPutOnHotbar(i, usefulSlots::contains)) {
                             // awaiting inventory move, so pause
                             return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
@@ -712,7 +712,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                 BlockState desired = bcc.getSchematic(pos.x, pos.y, pos.z, state);
                 if (desired == null) {
                     outOfBounds.add(pos);
-                } else if (containsBlockState(approxPlaceable, desired)) {
+                } else if (containsBlockItem(approxPlaceable, desired)) {
                     placeable.add(pos);
                 } else {
                     missing.put(desired, 1 + missing.getOrDefault(desired, 0));
@@ -1046,6 +1046,24 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         return true;
     }
 
+    /**
+     * Inventory availability is about the block item, not a guessed placement state.
+     * Facing, axis, half, hinge, rotation, waterlogging and similar properties are
+     * checked later against the state Minecraft would actually place at the target.
+     */
+    private static boolean hasBlockItem(BlockState candidate, BlockState desired) {
+        return candidate != null && desired != null && candidate.getBlock() == desired.getBlock();
+    }
+
+    private static boolean containsBlockItem(Collection<BlockState> states, BlockState desired) {
+        for (BlockState candidate : states) {
+            if (hasBlockItem(candidate, desired)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static boolean containsBlockState(Collection<BlockState> states, BlockState state) {
         for (BlockState testee : states) {
             if (sameBlockstate(testee, state)) {
@@ -1124,7 +1142,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                     // this won't be a schematic block, this will be a throwaway
                     return placeBlockCost * Baritone.settings().placeIncorrectBlockPenaltyMultiplier.value; // we're going to have to break it eventually
                 }
-                if (placeable.contains(sch)) {
+                if (containsBlockItem(placeable, sch)) {
                     return 0; // thats right we gonna make it FREE to place a block where it should go in a structure
                     // no place block penalty at all 😎
                     // i'm such an idiot that i just tried to copy and paste the epic gamer moment emoji too
