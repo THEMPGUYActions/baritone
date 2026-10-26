@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   build-and-release:
+    if: github.ref == 'refs/heads/26.3'
     name: Build and publish JARs
     runs-on: ubuntu-latest
     steps:
