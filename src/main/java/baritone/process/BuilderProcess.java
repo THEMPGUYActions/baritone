@@ -600,7 +600,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                     // Prefer empty/non-block hotbar slots so we do not displace a block needed for the build.
                     if (!baritone.getInventoryBehavior().attemptToPutOnHotbar(i, slot -> {
                         ItemStack hotbarStack = ctx.player().getInventory().getNonEquipmentItems().get(slot);
-                        return hotbarStack.isEmpty() || !(hotbarStack.getItem() instanceof BlockItem);
+                        return !hotbarStack.isEmpty() && hotbarStack.getItem() instanceof BlockItem;
                     })) {
                         return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
                     }
@@ -656,6 +656,10 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
 
         if (Baritone.settings().allowInventory.value) {
             ArrayList<Integer> usefulSlots = new ArrayList<>();
+            if (hasWaterloggingWork(bcc) && waterBucketHotbarSlot() >= 0) {
+                // Do not swap the water bucket back into the main inventory while waterlogging is pending.
+                usefulSlots.add(waterBucketHotbarSlot());
+            }
             List<BlockState> noValidHotbarOption = new ArrayList<>();
             outer:
             for (BlockState desired : desirableOnHotbar) {
