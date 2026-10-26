@@ -50,10 +50,12 @@ import net.minecraft.util.Tuple;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.block.*;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
@@ -283,7 +285,10 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                         continue; // irrelevant
                     }
                     BlockState curr = bcc.bsi.get0(x, y, z);
-                    if (!(curr.getBlock() instanceof AirBlock) && !(curr.getBlock() == Blocks.WATER || curr.getBlock() == Blocks.LAVA) && !valid(curr, desired, false)) {
+                    if (!(curr.getBlock() instanceof AirBlock)
+                            && !(curr.getBlock() == Blocks.WATER || curr.getBlock() == Blocks.LAVA)
+                            && !valid(curr, desired, false)
+                            && !needsWaterlogging(curr, desired)) {
                         BetterBlockPos pos = new BetterBlockPos(x, y, z);
                         Optional<Rotation> rot = RotationUtils.reachable(ctx, pos, ctx.playerController().getBlockReachDistance());
                         if (rot.isPresent()) {
@@ -294,6 +299,62 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             }
         }
         return Optional.empty();
+    }
+
+    private static final class Waterlog {
+        private final int hotbarSelection;
+        private final BetterBlockPos pos;
+        private final Rotation rot;
+
+        private Waterlog(int hotbarSelection, BetterBlockPos pos, Rotation rot) {
+            this.hotbarSelection = hotbarSelection;
+            this.pos = pos;
+            this.rot = rot;
+        }
+    }
+
+    private int waterBucketHotbarSlot() {
+        for (int i = 0; i < 9; i++) {
+            ItemStack stack = ctx.player().getInventory().getNonEquipmentItems().get(i);
+            if (!stack.isEmpty() && stack.getItem() == Items.WATER_BUCKET) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private Optional<Waterlog> findWaterloggable(BuilderCalculationContext bcc) {
+        int bucketSlot = waterBucketHotbarSlot();
+        if (bucketSlot < 0) {
+            return Optional.empty();
+        }
+
+        BetterBlockPos center = ctx.playerFeet();
+        for (BetterBlockPos pos : incorrectPositions) {
+            if (pos.distSqr(center) > 64) {
+                continue;
+            }
+            BlockState current = bcc.bsi.get0(pos);
+            BlockState desired = bcc.getSchematic(pos.x, pos.y, pos.z, current);
+            if (!needsWaterlogging(current, desired)) {
+                continue;
+            }
+            Optional<Rotation> rot = RotationUtils.reachable(ctx, pos, ctx.playerController().getBlockReachDistance());
+            if (rot.isPresent()) {
+                return Optional.of(new Waterlog(bucketSlot, pos, rot.get()));
+            }
+        }
+        return Optional.empty();
+    }
+
+    private boolean hasWaterloggingWork(BuilderCalculationContext bcc) {
+        for (BetterBlockPos pos : incorrectPositions) {
+            BlockState current = bcc.bsi.get0(pos);
+            if (needsWaterlogging(current, bcc.getSchematic(pos.x, pos.y, pos.z, current))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static class Placement {
@@ -408,7 +469,8 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             if (!meme.canPlace()) {
                 continue;
             }
-            if (valid(wouldBePlaced, desired, true)) {
+            if (valid(wouldBePlaced, desired, true) || needsWaterlogging(wouldBePlaced, desired)) {
+                // Place the correctly oriented block first; a water bucket can then set its waterlogged property.
                 return OptionalInt.of(i);
             }
         }
@@ -531,6 +593,33 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             trim();
         }
 
+        if (hasWaterloggingWork(bcc) && waterBucketHotbarSlot() < 0 && Baritone.settings().allowInventory.value) {
+            for (int i = 9; i < 36; i++) {
+                ItemStack stack = ctx.player().getInventory().getNonEquipmentItems().get(i);
+                if (!stack.isEmpty() && stack.getItem() == Items.WATER_BUCKET) {
+                    // InventoryBehavior only considers hotbar slots 1-7 and returns displaced items to inventory.
+                    // Let it choose any temporary slot; the normal builder inventory logic can restore blocks later.
+                    if (!baritone.getInventoryBehavior().attemptToPutOnHotbar(i, slot -> false)) {
+                        return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
+                    }
+                    break;
+                }
+            }
+        }
+
+        Optional<Waterlog> toWaterlog = findWaterloggable(bcc);
+        if (toWaterlog.isPresent() && isSafeToCancel && ctx.player().onGround() && ticks <= 0) {
+            Waterlog waterlog = toWaterlog.get();
+            baritone.getLookBehavior().updateTarget(waterlog.rot, true);
+            ctx.player().getInventory().setSelectedSlot(waterlog.hotbarSelection);
+            baritone.getInputOverrideHandler().setInputForceState(Input.SNEAK, true);
+            // Only use the bucket once the ray trace actually hits the intended waterloggable block.
+            if (ctx.isLookingAt(waterlog.pos)) {
+                baritone.getInputOverrideHandler().setInputForceState(Input.CLICK_RIGHT, true);
+            }
+            return new PathingCommand(null, PathingCommandType.CANCEL_AND_SET_GOAL);
+        }
+
         Optional<Tuple<BetterBlockPos, Rotation>> toBreak = toBreakNearPlayer(bcc);
         if (toBreak.isPresent() && isSafeToCancel && ctx.player().onGround()) {
             // we'd like to pause to break this block
@@ -565,6 +654,10 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
 
         if (Baritone.settings().allowInventory.value) {
             ArrayList<Integer> usefulSlots = new ArrayList<>();
+            if (hasWaterloggingWork(bcc) && waterBucketHotbarSlot() >= 0) {
+                // Do not swap the water bucket back into the main inventory while waterlogging is pending.
+                usefulSlots.add(waterBucketHotbarSlot());
+            }
             List<BlockState> noValidHotbarOption = new ArrayList<>();
             outer:
             for (BlockState desired : desirableOnHotbar) {
@@ -705,15 +798,20 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         List<BetterBlockPos> breakable = new ArrayList<>();
         List<BetterBlockPos> sourceLiquids = new ArrayList<>();
         List<BetterBlockPos> flowingLiquids = new ArrayList<>();
+        List<BetterBlockPos> waterlogging = new ArrayList<>();
         Map<BlockState, Integer> missing = new HashMap<>();
         List<BetterBlockPos> outOfBounds = new ArrayList<>();
         incorrectPositions.forEach(pos -> {
             BlockState state = bcc.bsi.get0(pos);
+            BlockState desired = bcc.getSchematic(pos.x, pos.y, pos.z, state);
+            if (needsWaterlogging(state, desired)) {
+                waterlogging.add(pos);
+                return;
+            }
             if (state.getBlock() instanceof AirBlock) {
-                BlockState desired = bcc.getSchematic(pos.x, pos.y, pos.z, state);
                 if (desired == null) {
                     outOfBounds.add(pos);
-                } else if (containsBlockState(approxPlaceable, desired)) {
+                } else if (containsBlockItem(approxPlaceable, desired)) {
                     placeable.add(pos);
                 } else {
                     missing.put(desired, 1 + missing.getOrDefault(desired, 0));
@@ -743,11 +841,18 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             }
         });
         sourceLiquids.forEach(pos -> toPlace.add(new GoalBlock(pos.above())));
+        if (waterBucketHotbarSlot() >= 0) {
+            // Move into interaction range first when a waterlogged block is not reachable from here.
+            waterlogging.forEach(pos -> toPlace.add(new GoalGetToBlock(pos)));
+        }
 
         if (!toPlace.isEmpty()) {
             return new JankyGoalComposite(new GoalComposite(toPlace.toArray(new Goal[0])), new GoalComposite(toBreak.toArray(new Goal[0])));
         }
         if (toBreak.isEmpty()) {
+            if (logMissing && !waterlogging.isEmpty()) {
+                logDirect("Cannot finish waterlogged blocks: keep a water bucket in the hotbar and ensure the blocks are reachable, then resume building.");
+            }
             if (logMissing && !missing.isEmpty()) {
                 logDirect("Missing materials for at least:");
                 logDirect(missing.entrySet().stream()
@@ -1049,6 +1154,42 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
         return true;
     }
 
+    /**
+     * Inventory availability is about the block item, not a guessed placement state.
+     * Facing, axis, half, hinge, rotation, waterlogging and similar properties are
+     * checked later against the state Minecraft would actually place at the target.
+     */
+    private static boolean hasBlockItem(BlockState candidate, BlockState desired) {
+        return candidate != null && desired != null && candidate.getBlock() == desired.getBlock();
+    }
+
+    private static boolean containsBlockItem(Collection<BlockState> states, BlockState desired) {
+        for (BlockState candidate : states) {
+            if (hasBlockItem(candidate, desired)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean needsWaterlogging(BlockState current, BlockState desired) {
+        if (current == null || desired == null || current.getBlock() != desired.getBlock()
+                || !(current.getBlock() instanceof LiquidBlockContainer)
+                || !current.hasProperty(BlockStateProperties.WATERLOGGED)
+                || !desired.hasProperty(BlockStateProperties.WATERLOGGED)
+                || current.getValue(BlockStateProperties.WATERLOGGED)
+                || !desired.getValue(BlockStateProperties.WATERLOGGED)) {
+            return false;
+        }
+        for (Property<?> property : current.getProperties()) {
+            if (property != BlockStateProperties.WATERLOGGED
+                    && !Objects.equals(current.getValue(property), desired.getValue(property))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static boolean containsBlockState(Collection<BlockState> states, BlockState state) {
         for (BlockState testee : states) {
             if (sameBlockstate(testee, state)) {
@@ -1063,6 +1204,11 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
             return true;
         }
         if (current.getBlock() instanceof LiquidBlock && Baritone.settings().okIfWater.value) {
+            // Water is not a substitute for a schematic block that explicitly needs to be waterlogged.
+            if (desired.hasProperty(BlockStateProperties.WATERLOGGED)
+                    && desired.getValue(BlockStateProperties.WATERLOGGED)) {
+                return false;
+            }
             return true;
         }
         if (current.getBlock() instanceof AirBlock && desired.getBlock() instanceof AirBlock) {
@@ -1127,7 +1273,7 @@ public final class BuilderProcess extends BaritoneProcessHelper implements IBuil
                     // this won't be a schematic block, this will be a throwaway
                     return placeBlockCost * Baritone.settings().placeIncorrectBlockPenaltyMultiplier.value; // we're going to have to break it eventually
                 }
-                if (placeable.contains(sch)) {
+                if (containsBlockItem(placeable, sch)) {
                     return 0; // thats right we gonna make it FREE to place a block where it should go in a structure
                     // no place block penalty at all 😎
                     // i'm such an idiot that i just tried to copy and paste the epic gamer moment emoji too
